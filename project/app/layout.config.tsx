@@ -1,10 +1,12 @@
 import type {BaseLayoutProps} from 'fumadocs-ui/layouts/shared';
 
+import Image from 'next/image';
+
 export const baseOptions: BaseLayoutProps = {
     nav:{
         title:(
             <>
-                <img src="/logo.png" alt="Logo" width={30} height={30}/>
+                <Image src="/logo.png" alt="Logo" width={30} height={30} />
                 PawAI
             </>
         ),
