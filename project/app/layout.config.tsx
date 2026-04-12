@@ -4,8 +4,8 @@ export const baseOptions: BaseLayoutProps = {
     nav:{
         title:(
             <>
-                <img src="/shape.png" alt="Logo" width={24} height={24}/>
-                GO2 PRO
+                <img src="/logo.png" alt="Logo" width={30} height={30}/>
+                PawAI
             </>
         ),
     },

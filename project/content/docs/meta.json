@@ -1,4 +1,11 @@
 {
   "title":"Name of Folder",
-  "pages":["index","Hardware_introduction","Software_introduction"]
+  "pages":[
+    "index",
+    "---Introduction---",
+    "Hardware_introduction",
+    "Software_introduction",
+    "---Technique---",
+    "PawAI"
+]
 }

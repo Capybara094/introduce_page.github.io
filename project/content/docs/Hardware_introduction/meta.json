@@ -1,10 +1,8 @@
 {
     "title":"Hardware_introduction",
     "description":"Hardware_introduction",
-    "root":true,
     "icon":"Wrench",
     "pages":[
-        
         "Go2_introduction.mdx",
         "RealSense_introduction.mdx",
         "Nano_introduction.mdx"
