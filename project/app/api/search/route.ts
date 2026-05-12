@@ -2,7 +2,7 @@ import { source } from '@/lib/source';
 import { createFromSource } from 'fumadocs-core/search/server';
 import { createTokenizer } from '@orama/tokenizers/mandarin';
 
-export const dynamic = 'force-static';
+export const dynamic = 'force-dynamic';
 
 export const { GET } = createFromSource(source, {
   tokenizer: createTokenizer(),
