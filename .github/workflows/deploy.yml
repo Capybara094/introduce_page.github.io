@@ -1,9 +1,10 @@
 name: Deploy Next.js site to Pages
 
 on:
-  push:
-    branches: ["main", "master"]
   workflow_dispatch:
+  # Disabled: Using Vercel for deployment instead
+  # push:
+  #   branches: ["main", "master"]
 
 permissions:
   contents: read
