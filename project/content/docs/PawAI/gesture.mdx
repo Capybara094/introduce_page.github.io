@@ -1,0 +1,281 @@
+---
+title: 手勢辨識開發歷程總整理
+---
+
+# 手勢辨識
+
+建立時間: 2026年4月18日 下午9:37
+狀態: 專題
+
+# 手勢辨識系統 (Gesture Recognition) 驗收與架構報告
+
+## 1. 系統架構與模型技術詳情
+
+- **所屬模組**: `vision_perception`
+- **核心節點**: `vision_perception_node.py`
+- **執行環境**:
+    - **硬體**: Jetson Orin Nano / Mac (Local Dev)
+    - **框架**: ROS2 Humble + Python 3.10
+
+### 底層推論模型解析
+
+1. **主要模型: MediaPipe Gesture Recognizer (Task API)**
+    - **模型檔**: `gesture_recognizer.task` (Float16 精確度版本)
+    - **運作原理**: 此模型採用 Pipeline 架構，依序包含三個子網路：
+        1. **Palm Detection (手掌偵測)**：先在大畫面中找出「手在哪裡」。
+        2. **Hand Landmarks (手部特徵點)**：找出手的 21 個 3D 關節點。
+        3. **Gesture Classification (手勢分類)**：根據這些關節點特徵，將手勢分類成預先訓練好的類別。
+    - **選擇原因**: 輕量化、推論速度極快，在 Jetson Nano 這種邊緣運算裝置上，只需依賴 CPU 就能流暢執行，不需佔用寶貴的 GPU 資源（GPU 可留給 LLM 或物件辨識）。
+2. **輔助模型: RTMPose / MediaPipe Pose**
+    - **功能**: 全身姿態估計 (Pose Estimation)。
+    - **用途**: 提供全身骨架資訊，除了判斷人的姿勢（站、坐、跌倒）外，未來也可以用來做「手與人體綁定」（確保這隻手是眼前這個人的，而不是背景路人的）。
+
+---
+
+## 2. 支援的手勢與對應功能
+
+系統結合了「MediaPipe 內建模型」、「幾何特徵計算」與「時序動態偵測」三種方法，目前共支援 **7 種** 手勢。
+
+### A. 靜態手勢 (由 MediaPipe 內建模型辨識)
+
+透過 `gesture_recognizer_backend.py` 進行映射：
+
+1. 🖐️ **布 (Open_Palm)** `palm`
+    - **功能**: System Pause (系統暫停 / 安全急停)
+2. 👊 **拳頭 (Closed_Fist)** `fist`
+    - **功能**: Enter Mute Mode (進入靜音/休眠模式)
+3. ☝️ **食指 (Pointing_Up)** `index`
+    - **功能**: Enter Listen Mode (進入聆聽模式)
+4. 👍 **比讚 (Thumb_Up)** `thumbs_up`
+    - **功能**: 提出搖屁股 (Wiggle) 請求。**注意：此為高風險動作，系統會要求再比一次「OK 手勢」進行二次確認才會真正執行。**
+5. ✌️ **YA (Victory)** `peace`
+    - **功能**: 提出伸懶腰 (Stretch) 請求。同樣需搭配「OK 手勢」進行二次確認。
+
+### B. 幾何特徵手勢 (自定義靜態規則)
+
+由於 MediaPipe 原生不支援此手勢，我們透過擷取 21 個手部關節點進行純幾何計算（實作於 `gesture_classifier.py`）：
+6.  👌 **OK 手勢** `ok`
+*   **辨識原理**: 計算大拇指尖端 (Thumb tip) 與食指尖端 (Index tip) 的距離，並與手掌寬度做比例運算 (`_OK_TOUCH_RATIO`)。同時確保其他三指伸直。
+*   **功能**: 作為最高優先級的手勢，專門用於執行高風險指令前的 **二次確認 (Secondary Confirmation)**。
+
+### C. 動態手勢 (時序軌跡追蹤)
+
+實作於 `dynamic_gesture_detector.py`：
+7.  👋 **揮手 (Wave)** `wave`
+*   **辨識原理**: 不依賴單一影格，而是追蹤手腕 (Wrist) 的 X 軸座標。在 1.5 秒的滾動視窗 (Rolling window) 內，偵測手腕 X 軸方向的「速度反轉次數 (Velocity reversals)」與「振幅大小 (Amplitude)」。
+*   **功能**: 觸發打招呼 (Wave Hello) 的社交互動。（**註：受限於相機距離與手腕軌跡幅度，目前較不穩定，Demo 時不建議依賴此功能**）。
+
+---
+
+## 3. 防誤觸與穩定性機制 (Stability Filtering)
+
+為避免把日常動作（如抓癢或聊天揮手）誤判成指令，我們設計了三道防護網：
+
+1. **多幀投票 (防雜訊)**：系統會連續觀察 5 張畫面，只有過半數畫面都辨識出同一個手勢，才會進入下一關。
+2. **時間鎖定 (防瞬間誤判)**：手勢必須在畫面上「刻意定住」至少 0.3 秒以上，不能閃爍或改變，系統才會確認觸發。
+3. **對話防呆 (情境感知)**：當機器人正在說話，或是剛才有人開口時，系統會自動無視（屏蔽）比讚或 YA 等一般手勢，確保對話不會被意外打斷。
+
+---
+
+## 4. 輸出資料規格 (Event Payload)
+
+當手勢滿足所有穩定性條件後，`vision_perception_node` 會向 `/event/gesture_detected` (ROS2 Topic) 發布 JSON 格式的事件。大腦模組會解析此 JSON 並觸發動作。
+
+**Payload 範例**:
+
+```json
+{
+  "stamp": 1716000000.123,
+  "event_type": "gesture_detected",
+  "gesture": "thumbs_up",
+  "confidence": 0.8,
+  "hand": "right"
+}
+```
+
+- `gesture`: 辨識出的手勢名稱。
+- `confidence`: 信賴度。此處非分類器原始機率，而是「投票比例 (Vote Ratio)」(例: 5 幀中有 4 幀是比讚，則為 0.8)。
+- `hand`: `left` 或 `right` (左右手資訊)。
+
+---
+
+## 5. 相關程式檔案清單 (File Structure)
+
+若需追查或修改手勢辨識邏輯，請參考以下核心檔案：
+
+### A. 視覺感知端 (`vision_perception` package)
+
+- **`vision_perception_node.py`**
+    - **角色**: 核心調度節點 (ROS2 Node)。
+    - **負責**: 接收相機影像、呼叫各分類器、執行投票與時間鎖定 (0.3s~0.5s) 防呆機制，並發布 `/event/gesture_detected` 訊號。
+- **`gesture_recognizer_backend.py`**
+    - **角色**: MediaPipe 模型串接。
+    - **負責**: 載入 `.task` 模型，進行基礎靜態手勢 (拳頭、比讚、布、食指、YA) 的初步辨識與標籤映射。
+- **`gesture_classifier.py`**
+    - **角色**: 幾何特徵分類器。
+    - **負責**: 透過 21 個關節點的空間幾何關係，計算食指與大拇指的距離，實作自定義的 **OK 手勢**。
+- **`dynamic_gesture_detector.py`**
+    - **角色**: 動態時序追蹤器。
+    - **負責**: 利用 Buffer 記錄手腕 X 軸軌跡，算出速度反轉次數與振幅，藉此判斷 **揮手 (Wave)** 動作。
+- **`event_builder.py`**
+    - **角色**: JSON 封裝工具。
+    - **負責**: 將辨識結果打包成符合系統標準的 JSON Payload。
+
+### B. 大腦決策端 (`interaction_executive` package)
+
+- **`brain_node.py`**
+    - **角色**: 動作執行中心。
+    - **負責**: 接收手勢 JSON，對應執行相對應的技能 (如 Wiggle, Stretch)。同時負責**對話防呆 (Conversation Gate)**，決定何時該忽略誤觸的手勢。
+
+---
+
+## 6. 系統現狀限制 (Known Constraints)
+
+目前的手勢辨識雖然可以進行展示，但它主要是作為「事件觸發器」，且受限於目前的開發進度，存在以下已知限制：
+
+### 限制一：高風險手勢容易誤觸
+
+- **現狀描述**: 目前系統在使用者聊天、抓癢時，極易誤判出「比讚 (thumbs_up)」或「YA (peace)」。雖然我們有加上「OK 二次確認」來防止狗直接亂動，但仍會跳出確認對話框打斷聊天。
+- **Demo 建議**: 報告或展示時，手部動作盡量放小，避免無意間比出類似讚的形狀。
+
+### 限制二：動態手勢不可行
+
+- **現狀描述**: 傳統視覺分類器適合看「單張靜態照片」，這導致它很難理解「揮手 (Wave)」、「畫圈 (Circle)」、「勾手 (ComeHere)」這種具備時間連續性的動作。目前 Wave 雖然有實作但極不穩定，Circle 與 ComeHere 則尚未成熟。
+- **Demo 建議**: 請勿將動態手勢列為 Demo 的展示功能，專注於 Palm、Fist、Index、OK 等靜態手勢即可。
+
+### 限制三：OK 手勢對角度敏感
+
+- **現狀描述**: OK 是用「幾何特徵演算法 (`gesture_classifier.py`)」算出來的，它不依賴黑箱神經網路，而是精算食指尖與大拇指尖的距離。這也代表它對「手指遮擋」、「鏡頭角度」比較敏感。
+- **Demo 建議**: 比 OK 時請盡量將掌心與手指正對鏡頭，且不要離鏡頭太遠。
+
+### 限制四：缺乏持續狀態 (State) 與多人處理
+
+- **現狀描述**:
+    1. 手勢目前只是「瞬間事件」，大腦 (Brain) 只會記住最近 5 秒的動作，不具備長期的狀態記憶。
+    2. 目前系統缺乏「多人同框綁定」機制。如果畫面中出現多雙手，系統可能會把手勢判定給錯誤的對象。
+- **Demo 建議**: 盡量保持單人在鏡頭前互動。
+
+---
+
+https://youtu.be/0P6fmmQO-TA?si=sFhRD51v8j36C4q8
+
+![57642.png](57642.png)
+
+[https://youtu.be/1RntzLZhCNQ?si=WrqV7ouN8ia6gCVa](https://youtu.be/1RntzLZhCNQ?si=WrqV7ouN8ia6gCVa)
+
+---
+
+# 手勢辨識
+
+目前功能：
+
+1. 目前較為穩定的有
+    1. *🖐️ **手掌 (Palm)**：**全面暫停**，停止所有動作。*
+    2. 👌 **OK手勢**：**二次確認**，用於執行指令前的最終確認。
+    3. *👍 **大拇指 (Thumb)**：**開心表現**，執行搖屁股 (Wiggle)。*
+    4. ✌️ **勝利手勢 (Peace)**：**放鬆表現**，執行伸懶腰 (Stretch)。
+
+待改進的點：
+
+1. 不穩定的有
+    1. 👊 **握拳 (Fist)**：**靜音模式**，機器狗坐下並關閉聲音。
+    2. *☝️ **食指 (Index)**：**監聽模式**，機器狗站立並開啟語音辨識。* 
+2. 目前完全不可行的動態手勢
+    1. *🔄 **畫圈 (Circle)**：執行**跳舞**動作。*
+    2. 👋 **揮手 (Wave)**：**打招呼**，機器狗會揮手回應。
+    3. 🫴 **勾手 (ComeHere)**：**召喚跟隨**，開啟自動跟隨模式。
+3. 目前手勢仍然容易誤觸 尤其是 wiggle 檢查一下吧
+
+---
+
+手勢辨識這塊目前是 **可以 demo，但要小心誤觸**。它不像語音/Brain 那麼完整，也不像 face 那樣有 state；它主要是「事件觸發器」。
+
+**手勢已做到的功能**
+
+1. **靜態手勢主線已接起來** 目前手勢在 `vision_perception` 裡，由 `vision_perception_node` 統一跑。主線是 MediaPipe Gesture Recognizer，再加一些自訂規則。
+    
+    已支援的 canonical gesture：
+    
+    - `palm`：手掌，系統暫停 / safety
+    - `fist`：握拳，靜音模式
+    - `index`：食指，監聽模式
+    - `ok`：OK，二次確認
+    - `thumbs_up`：大拇指，wiggle
+    - `peace`：勝利手勢，stretch
+    - `wave`：揮手，打招呼
+2. **OK 是幾何規則，不是 MediaPipe 內建** MediaPipe Recognizer 本身沒有 OK，所以程式另外用 thumb tip 和 index tip 距離判斷。
+    
+    這是合理做法，但也代表 OK 對手指遮擋、角度、距離比較敏感。
+    
+3. **wave 是動態旁路** 揮手不是走一般 stable vote，而是看 wrist 軌跡反轉，直接發 `/event/gesture_detected`。
+    
+    所以 wave 和其他靜態手勢的穩定邏輯不同。
+    
+4. **thumbs_up / peace 不會直接執行動作** 這點很重要。
+    
+    `thumbs_up -> wiggle`、`peace -> stretch` 目前會進 pending confirm，要求再比 OK。理論上已經有二次確認，不是看到大拇指就立刻搖。
+    
+5. **Brain 會吃最近手勢當語境**`pawai_brain` 會快取最近手勢 5 秒，塞進 prompt，例如 `[最近手勢] 大拇指（1 秒前）`。
+    
+    但 Brain 只是拿來理解場景，真正觸發動作主要在 Executive。
+    
+6. **Executive 有 conversation gate**`wave/fist/index` 在對話中、TTS 播放中會被抑制，避免突然打招呼或切模式。
+    
+    `palm` 是 safety，不會被擋。
+    
+
+**你目前理解需要修正的地方**
+
+1. **「thumb」實際 enum 是 `thumbs_up`** 文件有時寫 thumb，但程式主線是 `thumbs_up`。如果測試或文件用 `thumb`，下游可能對不上。
+2. **fist/index 文件說可用，但實際體感可能仍不穩** 程式有支援 `fist` 和 `index`，但這類手勢在現場容易被角度、手指伸展程度、光線影響。
+    
+    所以你說它們不穩，和實務風險一致。
+    
+3. **ComeHere / Circle 目前不是可用功能**`circle`、`come_here` 沒有真正實作成穩定動態手勢。
+    
+    目前不要把它們列成 demo 可觸發能力。
+    
+4. **wave 有實作，但你列為完全不可行，可能要重測** code 裡 wave detector 是有的。
+    
+    如果現場不可行，問題比較可能是相機距離、手腕軌跡幅度、backend 設定、或 demo runtime 沒走 recognizer 主線。
+    
+
+**待改進點**
+
+1. **wiggle 誤觸是高優先級** 現在 `thumbs_up/peace` 雖然要 OK confirm，但它們沒有被 conversation gate 擋住。
+    
+    所以聊天中如果被誤判成 thumbs_up，還是可能跳出「比 OK 我就做 wiggle」。
+    
+    這應該列 P0。
+    
+2. **runtime backend 設定可能和文件不一致** 文件說 MediaPipe Recognizer 是主線，但 `vision_perception.yaml`和 launch default 仍看到 `gesture_backend: rtmpose`。
+    
+    這會造成「文件說能辨識，但實際啟動不是那條路」的問題。要先確認 demo mode 到底用哪個 backend。
+    
+3. **缺少手勢 state** 手勢目前是 event，不是持續 state。Brain 只保留最近 5 秒。
+    
+    這對「你剛剛看到我比什麼」可以，但對更長時間的互動不夠。
+    
+4. **沒有 confidence/hand/history 注入 Brain** Brain 只知道 gesture name，不知道 confidence、左手右手、是否連續多次、是否可能誤判。
+    
+    這讓 LLM 很難自己判斷可靠度。
+    
+5. **多人同框會亂** 目前不是 robust multi-person gesture system。多人手出現在畫面裡時，手勢可能和錯的人綁在一起。
+6. **動態手勢還沒成熟** wave 有程式，但 circle / come_here 沒成熟。
+    
+    如果要做動態手勢，應該另開一條 temporal classifier / state machine，不要混在靜態 classifier 裡硬猜。
+    
+
+**我會這樣排優先級**
+
+P0：把 `thumbs_up/peace` 也加上 conversation / `tts_playing` gate，先止住 wiggle/stretch 誤觸。
+
+P0：確認 demo launch 實際使用 MediaPipe Gesture Recognizer，不要還是 `rtmpose` default。
+
+P1：調整 gesture cooldown、stable gate、confidence threshold，尤其是 `thumbs_up`。
+
+P1：把 gesture event 多帶 `confidence`、`hand`、最近 N 次 history 給 Brain/Studio 看。
+
+P2：wave 重新場測；如果要保留 demo，就調整 amplitude/cooldown。如果不穩，就從 demo 清單降級。
+
+P2：circle / come_here 先不要列 demo 功能，除非後面專門做動態手勢模型。
