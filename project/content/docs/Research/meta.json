@@ -4,6 +4,7 @@
   "pages":[
     "coco.mdx",
     "GPU_connect.mdx",
-    "GPU_verify.mdx"
+    "GPU_verify.mdx",
+    "各模型測試總整理.mdx"
 ]
 }
