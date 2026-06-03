@@ -3,9 +3,7 @@
   "description":"Research",
   "pages":[
     "coco.mdx",
-    "posture.mdx",
-    "gesture.mdx",
-    "object.mdx",
-    "overall_introduce.mdx"
+    "GPU_connect.mdx",
+    "GPU_verify.mdx"
 ]
 }
