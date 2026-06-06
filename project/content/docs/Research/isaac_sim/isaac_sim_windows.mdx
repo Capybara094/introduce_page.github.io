@@ -1,0 +1,145 @@
+---
+title:isaac sim 安裝教學
+---
+
+### 第一階段：伺服器端（學校 GPU 電腦）環境配置
+
+請確保你已經透過 SSH 連進學校的伺服器。
+
+### 1. 檢查驅動與硬體
+
+輸入以下指令：
+
+```c
+nvidia-smi
+```
+
+- **驅動版本 (Driver Version)**：必須在 **535.129.03** 或以上。
+- **CUDA 版本**：建議在 12.2 或以上。
+- 如果驅動太舊，請聯絡管理員更新，否則 Isaac Sim 無法啟動。
+
+### 安裝 Docker
+
+在終端機輸入這行指令，一次把 Docker 裝好：
+
+```c
+sudo apt-get install -y docker.io
+```
+
+### 2. 安裝 Docker 與 NVIDIA Container Toolkit
+
+這是為了讓 Docker 能抓到顯卡。
+
+```c
+# 安裝工具包 (如果尚未安裝)
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# 重啟 Docker 服務
+sudo systemctl restart docker
+```
+
+### 啟動並設定 Docker
+
+裝完之後，啟動它並設定成開機自動執行：
+
+```c
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+### 3. 取得 NVIDIA NGC 權限 (必要步驟)
+
+Isaac Sim 的鏡像是存放在 NVIDIA 的雲端倉庫。
+
+1. 到 [**NVIDIA NGC 官網**](https://www.google.com/url?sa=E&q=https%3A%2F%2Fngc.nvidia.com%2F) 註冊帳號。
+2. 點擊右上角頭像 -> **Setup** -> **Get API Key**。
+3. 在伺服器終端輸入：
+    
+    ```c
+    docker login nvcr.io
+    # 使用者名稱：$oauthtoken
+    # 密碼：輸入你的 API Key
+    ```
+    
+
+### 4. 下載並啟動 Isaac Sim 容器
+
+我們直接啟動專門為開發設計的容器：
+
+```c
+docker run --name isaac-sim --entrypoint bash -it --runtime=nvidia --gpus all \
+-e "ACCEPT_EULA=Y" --rm --network=host \
+-v ~/docker/isaac-sim/cache/kit:/root/.cache/ov/kit:rw \
+-v ~/docker/isaac-sim/cache/ov:/root/.cache/nvidia/omniverse:rw \
+-v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
+-v ~/docker/isaac-sim/documents:/root/Documents:rw \
+nvcr.io/nvidia/isaac-sim:4.2.0
+```
+
+### 第二階段：本地端（你的電腦）連線配置
+
+### 1. 安裝串流工具 (Streaming Client)
+
+1. 在你的筆電/桌機安裝 [**Omniverse Launcher**](https://www.google.com/url?sa=E&q=https%3A%2F%2Fwww.nvidia.com%2Fen-us%2Fomniverse%2F)。
+2. 進入 **Exchange** 分頁，搜尋 **"Streaming Client"** 並安裝。
+
+### 2. 啟動伺服器串流
+
+回到 **伺服器 (SSH)** 的 Docker 視窗內，輸入：
+
+```python
+# 啟動原生串流服務
+./isaac-sim.headless.native.sh
+```
+
+當你看到視窗輸出 [Isaac Sim] App is ready to receive connections 時，代表成功了。
+
+### 3. 本地端連線
+
+1. 打開你電腦上的 **Omniverse Streaming Client**。
+2. 在 **Server Address** 輸入學校伺服器的 IP 地址。
+3. 點擊 **Connect**。
+4. **大功告成！** 你現在應該能看到 Isaac Sim 的視窗在你的本地端跳出來。
+
+---
+
+### 第三階段：針對「機器狗訓練」的額外配置 (Isaac Lab)
+
+訓練機器狗通常需要 **Isaac Lab** (前身是 Orbit)，它建立在 Isaac Sim 之上。
+
+### 1. 在容器內安裝 Isaac Lab
+
+在 Docker 容器內，執行以下步驟：
+
+```python
+# 下載 Isaac Lab
+git clone https://github.com/isaac-sim/IsaacLab.git /workspace/IsaacLab
+
+# 進入目錄並安裝
+cd /workspace/IsaacLab
+./isaaclab.sh --install
+```
+
+### 2. 測試機器狗 Demo
+
+安裝完成後，試跑一下機器狗的基礎範例（例如 Unitree Go1 或 A1）：
+
+```python
+# 使用 python 啟動範例
+./isaaclab.sh -p source/standalone/tutorials/00_sim/create_scene.py
+```
+
+---
+
+### 關鍵：解決「學校網路防火牆」問題
+
+如果連不上，這通常是學校防火牆擋住了串流埠位。你有兩個解決方案：
+
+1. **方案 A (最簡單)**：請管理員幫你開 Port。Isaac Sim 串流主要使用 **30000 - 30009** (UDP/TCP)。
+2. **方案 B (SSH 隧道)**：如果你沒權限改防火牆，在你的本地電腦開啟 CMD，輸入：
+    
+    ```python
+    # 建立隧道將遠端的 3000 埠對應到本地
+    ssh -L 3000:localhost:3000 你的帳號@學校伺服器IP
+    ```

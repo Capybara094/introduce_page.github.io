@@ -1,0 +1,369 @@
+---
+title:Depth_Anything_V2實裝
+---
+
+連接資料夾
+
+```c
+cd ~/Depth_Anything_V2
+```
+
+### 連接到內部
+
+```c
+cd Depth-Anything-V2
+```
+
+啟動
+
+```c
+conda activate depth-v2
+```
+
+### 安裝 PyTorch (修正版)
+
+針對你的 CUDA 13.0 環境，請使用這個指令安裝支援 GPU 的版本：
+
+```c
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+*(這會安裝支援 CUDA 12.4 的 PyTorch，它能在你的 CUDA 13.0 驅動上跑)*
+
+### 第 3 步：安裝其他依賴
+
+```c
+pip install -r requirements.txt
+```
+
+### 第 4 步：下載模型權重 (務必執行)
+
+```c
+mkdir checkpoints
+wget -O checkpoints/depth_anything_v2_vitl.pth https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth
+```
+
+### 第 5 步：測試執行
+
+```c
+python run.py --encoder vitl --img-path assets/examples --outdir outputs
+```
+
+### 用 Python 寫程式呼叫 (進階開發)
+
+如果你是要做研究、整合到機器人或專題裡，你不會一直用指令跑，而是需要在 Python 程式碼裡拿到**深度數值 (Depth Map)**。
+
+請在 VS Code 新增一個檔案，命名為 test_depth.py，然後貼上以下程式碼：
+
+```python
+import cv2
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import time  # 新增 time 模組
+from depth_anything_v2.dpt import DepthAnythingV2
+
+# ================= 設定區 =================
+IMAGE_PATH = "assets/examples/demo01.jpg" 
+OUTPUT_DIR = "outputs"
+ENCODER = 'vitl' 
+# =========================================
+
+def main():
+    if not os.path.exists(IMAGE_PATH):
+        print(f"錯誤：找不到圖片 {IMAGE_PATH}")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    filename_base = os.path.splitext(os.path.basename(IMAGE_PATH))[0]
+    output_viz_path = os.path.join(OUTPUT_DIR, f"{filename_base}_viz.png")
+    output_npy_path = os.path.join(OUTPUT_DIR, f"{filename_base}_raw.npy")
+
+    print(f"正在初始化... (圖片: {os.path.basename(IMAGE_PATH)})")
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    model_configs = {
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
+    
+    model = DepthAnythingV2(**model_configs[ENCODER])
+    checkpoint_file = f'checkpoints/depth_anything_v2_{ENCODER}.pth'
+    
+    if not os.path.exists(checkpoint_file):
+        print(f"錯誤：找不到模型 {checkpoint_file}")
+        return
+
+    model.load_state_dict(torch.load(checkpoint_file, map_location='cpu'))
+    model = model.to(DEVICE).eval()
+
+    # --- 讀取圖片 ---
+    raw_img = cv2.imread(IMAGE_PATH)
+
+    # --- 計時開始：推論 ---
+    print("正在計算深度 (Inference)...")
+    t_start_infer = time.time()  # 開始計時
+    
+    depth = model.infer_image(raw_img)
+    
+    t_end_infer = time.time()    # 結束計時
+    infer_duration = t_end_infer - t_start_infer
+    # ---------------------
+
+    # 顯示數據
+    H, W = depth.shape
+    center_val = depth[H // 2, W // 2]
+    
+    print("=" * 40)
+    print(f"【深度圖數據 - Relative Depth】")
+    print(f"  - 圖片尺寸: {W} x {H}")
+    print(f"  - 最大值: {depth.max():.4f}")
+    print(f"  - 最小值: {depth.min():.4f}")
+    print("-" * 40)
+    print(f"【效能測試】")
+    print(f"  - 推論時間 (GPU): {infer_duration:.4f} 秒")
+    print("=" * 40)
+
+    # 儲存 NPY
+    np.save(output_npy_path, depth)
+
+    # --- 計時開始：繪圖與存檔 ---
+    print("正在生成圖片並存檔...")
+    t_start_plot = time.time() # 開始計時
+
+    plt.figure(figsize=(10, 8))
+    plt.imshow(depth, cmap='inferno')
+    plt.axis('off')
+    plt.title(f'Depth Map: {filename_base}')
+    plt.savefig(output_viz_path, bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+    
+    t_end_plot = time.time()   # 結束計時
+    plot_duration = t_end_plot - t_start_plot
+    # -------------------------
+
+    print(f"[完成] 圖片已存為: {output_viz_path}")
+    print(f"  - 繪圖存檔耗時:   {plot_duration:.4f} 秒")
+    print(f"  - 總流程耗時:     {infer_duration + plot_duration:.4f} 秒")
+
+if __name__ == '__main__':
+    main()
+```
+
+**執行方式：**
+
+在終端機輸入：
+
+```c
+python test_depth.py
+```
+
+---
+
+### 4. 跑影片 (如果需要)
+
+如果你有一段影片 video.mp4 上傳上去，可以用這個指令轉成深度影片：
+
+```c
+python run_video.py --encoder vitl --video-path video.mp4 --outdir video_output
+```
+
+---
+
+### 如果你需要「真實距離 (公尺)」怎麼辦？
+
+如果你是做工程應用，需要知道「前方障礙物距離 2.5 公尺」，目前的 vitl 模型做不到（它只能告訴你 A 比 B 近）。
+
+Depth Anything V2 其實有提供 **Metric Depth (度量深度)** 模型。如果你需要這個功能，請告訴我，我再教你怎麼換成 Metric Depth 的版本（需要載入不同的權重檔）。
+
+---
+
+最快、最無痛的方法就是直接使用 **Depth Anything V2 的「Metric Depth (度量深度)」版本**。
+
+單眼相機測距（Monocular Metric Depth）其實是一個物理上的難題（因為照片沒有雙眼的視差，電腦不知道這張照片是用顯微鏡拍的還是望遠鏡拍的）。因此，模型通常分為**室內**和**室外**兩種訓練權重。
+
+### 第一部分：使用 Depth Anything V2 Metric Depth
+
+你需要下載專門針對「真實距離」微調過的模型權重。
+
+### 1. 選擇並下載模型
+
+請在 VS Code 的終端機執行下載指令。請根據你的使用場景選擇（兩個都下載也可以）：
+
+**選項 A：室內場景 (Indoor)**
+
+適合：房間、辦公室、教室（最大距離約 20 公尺）。
+
+訓練數據：Hypersim
+
+```c
+wget -O checkpoints/depth_anything_v2_metric_hypersim_vitl.pth https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-Hypersim-Large/resolve/main/depth_anything_v2_metric_hypersim_vitl.pth
+```
+
+**選項 B：室外場景 (Outdoor)**
+
+適合：街道、駕駛、建築物（最大距離約 80 公尺）。
+
+訓練數據：Virtual KITTI
+
+```c
+wget -O checkpoints/depth_anything_v2_metric_vkitti_vitl.pth https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-VKITTI-Large/resolve/main/depth_anything_v2_metric_vkitti_vitl.pth
+```
+
+### 2. 撰寫 Metric Depth 程式碼
+
+請建立一個新檔案 test_metric.py。
+
+這個程式碼與之前的不同點在於：模型設定中多了 max_depth 參數，且輸出的數值單位直接就是**公尺 (Meters)**。
+
+```python
+import sys
+import os
+import time # 新增 time 模組
+
+# 強制指向 metric_depth 資料夾
+sys.path.insert(0, 'metric_depth')
+
+import cv2
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+from depth_anything_v2.dpt import DepthAnythingV2
+
+# ================= 設定區 =================
+IMAGE_PATH = "assets/examples/demo01.jpg"
+OUTPUT_DIR = "outputs"
+SCENE_TYPE = 'indoor' 
+# =========================================
+
+def main():
+    if not os.path.exists(IMAGE_PATH):
+        print(f"錯誤：找不到圖片 {IMAGE_PATH}")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    filename_base = os.path.splitext(os.path.basename(IMAGE_PATH))[0]
+    output_viz_path = os.path.join(OUTPUT_DIR, f"{filename_base}_{SCENE_TYPE}_metric.png")
+    output_npy_path = os.path.join(OUTPUT_DIR, f"{filename_base}_{SCENE_TYPE}_metric.npy")
+
+    print(f"正在初始化 Metric Depth ({SCENE_TYPE})...")
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if SCENE_TYPE == 'indoor':
+        dataset = 'hypersim'
+        max_depth = 20.0 
+    else: 
+        dataset = 'vkitti'
+        max_depth = 80.0 
+        
+    model_configs = {
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
+    
+    model = DepthAnythingV2(**{**model_configs['vitl'], 'max_depth': max_depth})
+    
+    checkpoint_path = f'checkpoints/depth_anything_v2_metric_{dataset}_vitl.pth'
+    if not os.path.exists(checkpoint_path):
+        print(f"錯誤：找不到權重 {checkpoint_path}")
+        return
+
+    try:
+        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+    except Exception as e:
+        print("載入權重時遇到輕微不匹配，嘗試使用 strict=False...")
+        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'), strict=False)
+
+    model = model.to(DEVICE).eval()
+    
+    raw_img = cv2.imread(IMAGE_PATH)
+
+    # --- 計時開始：推論 ---
+    print(f"正在計算真實距離 (圖片: {os.path.basename(IMAGE_PATH)})...")
+    t_start_infer = time.time()
+    
+    depth = model.infer_image(raw_img)
+    
+    t_end_infer = time.time()
+    infer_duration = t_end_infer - t_start_infer
+    # ---------------------
+    
+    H, W = depth.shape
+    center_dist = depth[H // 2, W // 2]
+    
+    print("=" * 40)
+    print(f"【真實距離數據 (單位: 公尺)】")
+    print(f"  - 最近距離: {depth.min():.2f} m")
+    print(f"  - 最遠距離: {depth.max():.2f} m")
+    print(f"  - 中心點距離: {center_dist:.2f} m")
+    print("-" * 40)
+    print(f"【效能測試】")
+    print(f"  - 推論時間 (GPU): {infer_duration:.4f} 秒")
+    print("=" * 40)
+
+    np.save(output_npy_path, depth)
+    
+    # --- 計時開始：繪圖與存檔 ---
+    print("正在生成可視化圖片...")
+    t_start_plot = time.time()
+
+    plt.figure(figsize=(10, 8))
+    viz_max = depth.max() if depth.max() < max_depth else max_depth
+    plt.imshow(depth, cmap='inferno_r', vmax=viz_max) 
+    plt.colorbar(label='Depth (Meters)')
+    plt.title(f'Metric: {filename_base} ({SCENE_TYPE})')
+    plt.savefig(output_viz_path, bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+
+    t_end_plot = time.time()
+    plot_duration = t_end_plot - t_start_plot
+    # -------------------------
+    
+    print(f"[完成] 圖片已存為: {output_viz_path}")
+    print(f"  - 繪圖存檔耗時:   {plot_duration:.4f} 秒")
+    print(f"  - 總流程耗時:     {infer_duration + plot_duration:.4f} 秒")
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+### 第二部分：常見的 Metric Depth 誤差問題
+
+必須老實告訴你，單鏡頭估算真實距離有天生的缺陷：**「尺度模糊 (Scale Ambiguity)」**。
+
+舉例：一張照片裡有一個球，電腦無法確定這是一個「放在桌上的網球」還是一個「放在遠處巨大的裝置藝術球」。
+
+Depth Anything V2 的 Metric 模型是假設你的相機參數（焦距、感光元件大小）跟它訓練時用的相機差不多。
+
+**如果發現距離不準（例如實際 2 公尺，它算出來 5 公尺）：**
+
+你需要一個**比例係數 (Scale Factor)** 來校正。
+
+1. 找一個已知距離的物體（例如你知道牆壁離你 3 公尺）。
+2. 看模型跑出來是多少（例如跑出來 6 公尺）。
+3. 校正係數 = 3 / 6 = 0.5。
+4. 之後所有的結果都乘上 0.5。
+
+---
+
+### 第三部分：其他推薦的模型
+
+如果你發現 Depth Anything V2 的絕對距離不夠準，以下是目前學術界公認最強的另外兩個選擇（但安裝會比較麻煩）：
+
+### 1. ZoeDepth (推薦 🌟)
+
+- **特點**：它是專門為了 Metric Depth 設計的。它結合了相對深度和度量深度，通常在「不需要校正」的情況下，距離抓得比 Depth Anything 準一點。
+- **適用**：如果你非常在意「不用手動校正就有還不錯的公尺數值」。
+- **缺點**：這是另一個專案，需要重新安裝環境。
+
+### 2. Marigold (畫質最強 🐢)
+
+- **特點**：基於 Stable Diffusion (生成式 AI) 改的。它的細節非常非常驚人，頭髮絲的深度都能算出來。
+- **缺點**：**慢**。跑一張圖可能要好幾秒甚至更久（不像 Depth Anything 是毫秒級的）。而且它主要輸出是相對深度，Metric 版本還在實驗階段。
+
+### 總結建議
+
+1. **先用我上面給的 test_metric.py** 跑跑看 indoor 或 outdoor 模式。
+2. 找個捲尺實際量一下物體距離，跟程式跑出來的 metric_depth.npy 比對一下。
+3. 如果誤差是線性的（例如都偏大 2 倍），就在程式碼最後乘上一個修正係數即可。這是工程上最實用的解法。

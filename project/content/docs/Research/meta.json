@@ -1,10 +1,10 @@
 {
   "title":"Research",
-  "description":"Research",
   "pages":[
-    "coco.mdx",
-    "GPU_connect.mdx",
-    "GPU_verify.mdx",
+    "D435",
+    "GPU",
+    "YOLO",
+    "isaac_sim",
     "各模型測試總整理.mdx"
 ]
 }

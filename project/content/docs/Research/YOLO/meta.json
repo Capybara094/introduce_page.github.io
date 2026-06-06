@@ -1,0 +1,10 @@
+{
+  "title":"YOLO",
+  "description":"YOLO",
+  "pages":[
+    "coco.mdx",
+    "yoloworld_introduce.mdx",
+    "yoloworld.mdx",
+    "Depth_Anything_V2.mdx"
+]
+}

@@ -1,0 +1,8 @@
+{
+  "title":"GPU",
+  "description":"GPU",
+  "pages":[
+    "GPU_connect.mdx",
+    "GPU_verify.mdx"
+]
+}

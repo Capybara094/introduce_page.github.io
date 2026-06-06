@@ -1,0 +1,135 @@
+ ---
+title:YOLO-World (OVD)介紹
+---
+
+就是給 YOLO 裝上了一個「文字輸入框」。
+
+### 傳統物件偵測 (你現在用的 YOLOv8 + COCO)
+
+- **原理**：像是一個死背單字的學生。老師教它這 80 個單字（人、車、狗、杯子...），它就只認得這 80 個。
+- **缺點**：如果你叫它找「**皮卡丘**」或「**滅火器**」，它會直接跟你說「沒看到」，因為 COCO 資料集裡沒有這些分類。
+
+### 開放詞彙偵測 (OVD)
+
+- **原理**：它是**懂語言的**。它把「圖片」和「文字」連結在一起。
+- **能力**：你不需要重新訓練模型，只需要**給它一個文字提示 (Prompt)**，例如 ["fire extinguisher", "pikachu", "blue plastic bottle"]，它就能立刻在畫面上框出這些東西。
+- **核心**：**想找什麼，打字進去，它就找給你。尋找指定物品的概念。（可透過mcp設定api到set_classes）**
+
+---
+
+### 推薦神兵：YOLO-World
+
+在 OVD 的領域裡，原本最強的是 **Grounding DINO**，但它很慢（無法即時）。
+
+直到 2024 年初，**YOLO-World** 出現了。
+
+它是目前唯一能做到 **「即時 (Real-time)」** 且 **「想找什麼隨便你定」** 的模型。最棒的是，**它已經被整合進 ultralytics 套件裡了**，這意味著你的 Phase 2 架構幾乎不用改就能用！
+
+只需要修改 inference_server.py 的三行程式碼：（基本運用，要用請看下面那個）
+
+```python
+from ultralytics import YOLO
+
+# 1. 載入模型 (把 .pt 換成 world 版本)
+# 這裡選用 yolov8s-world (Small 版本就超強了，也很快)
+model = YOLO('yolov8s-world.pt')  
+
+# 2. 定義你想找什麼 (這就是 Open Vocabulary 的威力！)
+# 你可以隨時動態改變這份清單，不用重新訓練
+model.set_classes(["keys", "red balloon", "dinosaur toy", "person"])
+
+# 3. 偵測 (跟原本一模一樣)
+results = model(image)
+
+# ... (後面的 bbox 處理完全不用改)
+```
+
+---
+
+### **1. 模型選擇：你要選哪一個 .pt 檔？**
+
+- **開發端 (Mac M4)**：效能強，跑 S 或 M 都很順。
+- **部署端 (RTX 8000)**：效能怪獸，跑 L 或 X 都沒問題。
+
+| **模型檔名 (v2 是最新版)** | **大小** | **速度** | **聰明程度** | **建議場景** |
+| --- | --- | --- | --- | --- |
+| yolov8s-worldv2.pt | Small | 極快 | 普通 | 手機/樹莓派/極低延遲需求 |
+| **yolov8m-worldv2.pt** | **Medium** | **快** | **聰明** | **Mac M4 開發首選 (CP值最高)** |
+| **yolov8l-worldv2.pt** | Large | 中等 | 很聰明 | RTX 8000 建議起手式 |
+| yolov8x-worldv2.pt | X-Large | 稍慢 | 最聰明 | 追求極致準確度時用 |
+
+### 2. 進階整合：如何加進你的 inference_server.py？
+
+你可以把 set_classes 變成一個 **API 接口**。負責 MCP (大腦) 的同學就可以**隨時透過網路**告訴你的 YOLO (眼睛)：「現在改找鑰匙」、「現在改找水瓶」。（完整：
+
+```jsx
+from fastapi import FastAPI, UploadFile, File
+from pydantic import BaseModel
+from ultralytics import YOLO
+from PIL import Image
+import io
+
+app = FastAPI()
+
+# 1. 載入 YOLO-World 模型
+print("正在載入 YOLO-World...")
+model = YOLO('yolov8m-worldv2.pt')
+
+# 預設先找一些基本的，避免一開始是瞎子
+default_classes = ["person", "chair", "cup"]
+model.set_classes(default_classes)
+print(f"目前鎖定目標: {default_classes}")
+
+# 定義一個資料結構，用來接收 MCP 傳來的清單
+class TargetList(BaseModel):
+    targets: list[str]
+
+# --- 新增的 API:讓 MCP 動態改變想找的東西 ---
+@app.post("/set_targets")
+def set_targets(target_list: TargetList):
+    new_targets = target_list.targets
+    
+    # 呼叫 YOLO-World 的設定功能
+    model.set_classes(new_targets)
+    
+    print(f"收到指令！目標已更新為: {new_targets}")
+    return {"status": "success", "current_targets": new_targets}
+# ----------------------------------------
+
+@app.post("/detect")
+async def detect_object(file: UploadFile = File(...)):
+    # 這裡跟之前完全一樣，不用動！
+    # 模型會根據最近一次 set_classes 的設定來找東西
+    image_data = await file.read()
+    image = Image.open(io.BytesIO(image_data))
+    
+    # 信心度建議設低一點 (0.1 ~ 0.2)，因為 Open Vocabulary 比較難
+    results = model(image, conf=0.15) 
+    
+    # ... (後面的處理邏輯省略，跟之前一樣) ...
+```
+
+### 3. 實際運作情境 (與 MCP 配合)
+
+當你改成這樣後，你們的機器人就變成「聽得懂人話」了：
+
+1. **情境一：巡邏模式**
+    - MCP 沒下令，你的 Server 預設找 ["person", "obstacle"]。
+    - 機器人避障正常運作。
+2. **情境二：尋物模式**
+    - 使用者說：「去幫我找**綠色的水壺 (green bottle)**。」
+    - MCP (大腦) 收到後，發送一個 POST 請求到你的 /set_targets，內容是 ["green bottle"]。
+    - 你的 YOLO (眼睛) 瞬間切換模式，現在眼裡只有綠色水壺，其他東西都看不到。
+    - 一旦看到，回傳座標，MCP 控制機器人過去。
+3. **情境三：恢復**
+    - 任務完成，MCP 再發送 ["person", "obstacle"] 把你切換回巡邏模式。
+
+### 💡 溫馨提醒 (坑點注意)
+
+1. **英文限定**：set_classes 目前只吃**英文**。所以 MCP 那邊如果要傳指令，記得要把「恐龍」轉成 "dinosaur" 再傳給你。
+2. **用詞精準**：詞彙越具體越好。
+    - 好："blue pen", "running shoe"
+    - 壞："something nice", "danger" (太抽象，它看不懂)
+3. **信心度 (Confidence)**：
+    - YOLO-World 因為是猜測未知的東西，信心度通常比較低。
+    - 原本 YOLOv8 你可能設 0.5，用 YOLO-World 建議先設 **0.1 ~ 0.2**，不然很容易什麼都抓不到。

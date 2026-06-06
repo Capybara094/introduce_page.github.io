@@ -1,0 +1,171 @@
+---
+title:isaac sim mac 安裝教學
+---
+
+你要在 Mac 上做的事情只有兩件：**「寫程式(遙控)」** 和 **「看畫面(直播)」**。
+
+---
+
+### 一、 你需要在 Mac 上下載這兩樣軟體
+
+請去下載並安裝:
+
+[**NVIDIA Omniverse Launcher**](https://www.nvidia.com/en-us/omniverse/download/)
+
+- 下載 Mac 版 -> 安裝後登入 -> 在裡面搜尋並安裝 **"Omniverse Streaming Client"**。
+- **用途：** 這是你的「螢幕」。用來接收學校傳回來的 3D 畫面（包含那隻狗和你的紅框框）。
+
+*(備註：如果你人在校外，記得先安裝並連上學校的 VPN)*
+
+---
+
+### 二、 你的標準操作流程 (Step-by-Step)
+
+以後你每次要開工，就是做這 4 個步驟：
+
+### 步驟 1：連線寫程式 (VS Code)
+
+1. 打開 Mac 上的 **VS Code**。
+2. 連進學校GPU。
+3. 建立或開啟你的 `main.py`。
+
+### 步驟 2：啟動 Server 端程式
+
+1. 在 VS Code 下方的終端機 (Terminal) 裡。
+2. 輸入執行指令（假設你們環境都設好了）：
+    
+    ```bash
+    # 這是叫學校電腦開始運算，並把畫面準備好透過網路傳輸
+    ./python.sh main.py
+    
+    ```
+    
+3. 這時候終端機應該會顯示類似 `Isaac Sim Headless Mode Started` 或 `Streaming Service started` 的字樣。**這表示學校電腦已經開始跑了，正在等你連進去看。**
+
+### 步驟 3：開啟畫面 (Streaming Client)
+
+1. 打開 Mac 上的 **Omniverse Streaming Client**。
+2. 在 `Server` 欄位輸入學校電腦的 IP。
+3. 點擊 **Connect**。
+
+### 步驟 4：開始工作
+
+- 這時候，你的 Streaming Client 視窗就會跳出 **Isaac Sim 的 3D 畫面**。
+- 你會看到 Unitree Go2 站在那裡。
+- 你看著畫面，發現這隻狗動作怪怪的？
+- 回到 **VS Code** 修改 `main.py` 的邏輯 -> 存檔 -> 在終端機按 `Ctrl+C` 停止 -> 再輸入一次指令重新執行。
+- 畫面重整，看新的結果。
+
+---
+
+### 總結
+
+- **不用裝** Ubuntu。
+- **不用裝** UTM 虛擬機。
+- **不用裝** ROS (除非老師強迫)。
+- **只要裝** **VS Code** (寫扣用) + **Omniverse Streaming Client** (看片用)。
+
+---
+
+**main.py:**
+
+```python
+# 1. 引入必要的函式庫
+from omni.isaac.kit import SimulationApp
+simulation_app = SimulationApp({"headless": True}) # 啟動模擬器後台
+
+import torch
+# 引入你們的模型庫 (假設你們已經裝好了)
+from ultralytics import YoloWorld
+from transformers import DepthAnythingForDepthEstimation
+# 引入 Isaac Sim 的核心功能
+from omni.isaac.core import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.sensor import Camera
+
+# ---------------------------------------------------------
+# 2. 設定環境與載入機器人 (Setup)
+# ---------------------------------------------------------
+world = World()
+# (A) 載入環境：例如 Office
+add_reference_to_stage(usd_path=".../Office.usd", prim_path="/World/Office")
+
+# (B) 載入機器狗 (Go2)
+# 這裡建議直接拿 Isaac Lab 範例裡的 Go2 USD
+robot_prim_path = "/World/Go2"
+add_reference_to_stage(usd_path=".../Go2.usd", prim_path=robot_prim_path)
+
+# (C) 關鍵：載入「走路控制器 (Locomotion Controller)」
+# 你們不需要自己寫走路的數學，去 Copy 官方範例的 controller
+# 假設我們有一個簡單的控制器叫 SimpleController
+controller = SimpleController(robot_prim_path) 
+
+# (D) 掛載眼睛 (相機)
+# 在狗的頭部掛一個攝影機
+camera = Camera(
+    prim_path=f"{robot_prim_path}/trunk/camera",
+    resolution=(640, 480)
+)
+camera.initialize()
+
+world.reset()
+
+# ---------------------------------------------------------
+# 3. 載入你們的大腦 (Load AI Models)
+# ---------------------------------------------------------
+print("Loading Models...")
+model_yolo = YoloWorld("yolov8s-world.pt")  # 載入 YOLO
+model_depth = DepthAnythingForDepthEstimation.from_pretrained("...") # 載入 Depth
+model_yolo.to("cuda") # 丟到 GPU
+model_depth.to("cuda")
+
+# ---------------------------------------------------------
+# 4. 開始模擬循環 (The Loop - 連結發生的地方)
+# ---------------------------------------------------------
+target_class = "backpack" # 我們要找背包
+state = "SEARCHING"       # 初始狀態：搜尋中
+
+while simulation_app.is_running():
+    # 讓物理引擎跑一步
+    world.step(render=True)
+    
+    # [連結點 1]：從 Isaac Sim 抓照片
+    rgb_image = camera.get_rgb()      # 拿到圖了！
+    
+    # [連結點 2]：把照片丟給模型 (AI 推論)
+    # 只有當我們需要看的時候才跑，不用每一幀都跑(會卡)
+    results_yolo = model_yolo.predict(rgb_image) 
+    results_depth = model_depth(rgb_image)
+    
+    # [連結點 3]：MCP 邏輯 (判斷接下來要幹嘛)
+    # 這裡就是寫 if/else 的地方
+    
+    move_command = [0, 0, 0] # [x速度, y速度, 轉向]
+    
+    if state == "SEARCHING":
+        # 檢查 YOLO 有沒有看到 target_class
+        if is_target_found(results_yolo, target_class):
+            state = "FOUND"
+            print("看到東西了！切換模式！")
+        else:
+            # 沒看到，繼續隨便走
+            move_command = [0.5, 0, 0] # 往前走
+            
+    elif state == "FOUND":
+        # 檢查 Depth 距離還有多遠
+        dist = get_distance(results_depth)
+        
+        if dist > 0.5: # 距離大於 0.5 公尺
+            move_command = [0.2, 0, 0] # 慢慢靠近
+        else:
+            move_command = [0, 0, 0]   # 停下來！
+            print("抵達目標，任務結束")
+            
+    # [連結點 4]：把 MCP 決定的指令，傳給走路控制器
+    controller.apply_action(move_command) 
+    
+    # (選配) 畫出 Debug 線條讓你們看
+    draw_debug_lines(results_yolo, results_depth)
+
+simulation_app.close()
+```
