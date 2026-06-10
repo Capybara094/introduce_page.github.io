@@ -2,144 +2,132 @@
 title: isaac sim 安裝教學
 ---
 
-### 第一階段：伺服器端（學校 GPU 電腦）環境配置
+因為我們的機器狗並非教育版，所以內部SDK沒有公開供開發者使用，因此關於一些較高難度的導航避障、特殊動作學習等等，最初期望可以透過Nividia Omniverse的模擬器來自己訓練，我們使用了系上租用的GPU來跑模型，並搭配Isaac sim來搭載訓練環境或是Isaac Lab進行數位孿生，最後再使用WebRTC stream將畫面回傳到本機觀看。
 
-請確保你已經透過 SSH 連進學校的伺服器。
+但後來因為中間屢次失敗，並且顧慮及其他工作的關係因而放棄此項目研究。但決定將過去研究結果紀錄於此，做為未來參考使用。
 
-### 1. 檢查驅動與硬體
+## Isaac sim與Isaac Lab的比較
 
-輸入以下指令：
+兩者皆是Nividia Omniverse旗下的產品，但Isaac Lab是基於Isaac Sim之上一個更輕量、高階的套件。以下是兩者比較表：
 
-```c
-nvidia-smi
+| **項目** | **Isaac Sim** | **Isaac Lab** |
+| --- | --- | --- |
+| **定位** | 通用機器人模擬器平台 | 建立於 Isaac Sim 之上的 訓練框架 |
+| **主要用途** | 物理模擬、場景建置、感測器模擬 | 強化學習、訓練、環境管理 |
+| 下載難易度 | 較簡單 | 較複雜 |
+| 開發彈性 | 較高 | 較低 |
+| 上手難易度 | 因為Isaac Sim給予開發者更高的自由度，所以更加新手不友善 | 相對Isaac Sim簡單 |
+| 顯示軟體 | Isaac Sim | Isaac Sim |
+
+## 連線方式
+
+### 1. 登入伺服器
+
+因為**Isaac Sim**需要很高的算力，所以建議在GPU上操作
+
+打開電腦的終端機，並輸入：
+
+```bash
+ssh username@hostname -p port_number
 ```
 
-- **驅動版本 (Driver Version)**：必須在 **535.129.03** 或以上。
-- **CUDA 版本**：建議在 12.2 或以上。
-- 如果驅動太舊，請聯絡管理員更新，否則 Isaac Sim 無法啟動。
+接著會再要求輸入密碼，因為加密的關係，所以輸入密碼時不會顯示任何輸入資料，打完之後直接按下Enter即可，登入後開頭會出現$的字樣及算成功。登入後可以輸入`nvidia-smi` 確認顯卡狀態：
 
-### 安裝 Docker
+![isaac sim.png](/isaac sim.png)
 
-在終端機輸入這行指令，一次把 Docker 裝好：
+### 2. 安裝 Docker 與 NVIDIA 環境
 
-```c
-sudo apt-get install -y docker.io
+接著為了不破壞環境，因此建議可以安裝Docker。Docker 是一種容器化技術，透過隔離行程與檔案系統來建立獨立的執行環境，因為這次機器狗的作業系統ROS2 版本間與Ubuntu版本有極度依賴性，例如ROS2 Jazzy 綁定Ubuntu  24.04，ROS2 Humble綁定Ubuntu  22.04，如果不使用Docker的話，則電腦的Ubuntu也會連帶不可以更新，否則整個專案都會遭受影響。
+
+先安裝Docker：
+
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 ```
 
-### 2. 安裝 Docker 與 NVIDIA Container Toolkit
+為了讓Docker可以使用GPU，所以也需要下載NVIDIA Container Toolkit：
 
-這是為了讓 Docker 能抓到顯卡。
-
-```c
-# 安裝工具包 (如果尚未安裝)
-sudo apt-get update
-sudo apt-get install -y nvidia-container-toolkit
-
-# 重啟 Docker 服務
+```bash
+curl -fsSL [https://nvidia.github.io/libnvidia-container/gpgkey](https://nvidia.github.io/libnvidia-container/gpgkey) | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L [https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list](https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list) | \
+sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 啟動並設定 Docker
+### 3. 取得並設定 NVIDIA NGC 金鑰
 
-裝完之後，啟動它並設定成開機自動執行：
+再來還需要取得 NVIDIA NGC 專屬金鑰 (API Key)才可以在Docker上拉取NVIDIA的Image
+1.先前往NVIDIA NGC 官方網站：[ngc.nvidia.com](https://ngc.nvidia.com/)註冊開發者帳號
+2.點擊右上角的使用者頭像，選擇 **Setup
+3.**點擊 **Generate API Key
+4.取得 API Key 後，回到終端機，使用 Docker 登入 NVIDIA NGC**
 
-```c
-sudo systemctl start docker
-sudo systemctl enable docker
+```bash
+docker login nvcr.io
 ```
 
-### 3. 取得 NVIDIA NGC 權限 (必要步驟)
+**Username:** 輸入 `$oauthtoken` 
+**Password:** 貼上你剛剛在 NGC 網站上生成的 API Key
 
-Isaac Sim 的鏡像是存放在 NVIDIA 的雲端倉庫。
+### 4. 下載與啟動 Isaac Sim 環境
 
-1. 到 [**NVIDIA NGC 官網**](https://www.google.com/url?sa=E&q=https%3A%2F%2Fngc.nvidia.com%2F) 註冊帳號。
-2. 點擊右上角頭像 -> **Setup** -> **Get API Key**。
-3. 在伺服器終端輸入：
-    
-    ```c
-    docker login nvcr.io
-    # 使用者名稱：$oauthtoken
-    # 密碼：輸入你的 API Key
-    ```
-    
+接著把把 Isaac Sim 的 Image（Pull）下來(至於後面的版本要先確認)
 
-### 4. 下載並啟動 Isaac Sim 容器
-
-我們直接啟動專門為開發設計的容器：
-
-```c
-docker run --name isaac-sim --entrypoint bash -it --runtime=nvidia --gpus all \
--e "ACCEPT_EULA=Y" --rm --network=host \
--v ~/docker/isaac-sim/cache/kit:/root/.cache/ov/kit:rw \
--v ~/docker/isaac-sim/cache/ov:/root/.cache/nvidia/omniverse:rw \
--v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
--v ~/docker/isaac-sim/documents:/root/Documents:rw \
-nvcr.io/nvidia/isaac-sim:4.2.0
+```bash
+docker pull nvcr.io/nvidia/isaac-sim:4.5.0-ros2-humble-1.0
 ```
 
-### 第二階段：本地端（你的電腦）連線配置
+啟動環境：
 
-### 1. 安裝串流工具 (Streaming Client)
-
-1. 在你的筆電/桌機安裝 [**Omniverse Launcher**](https://www.google.com/url?sa=E&q=https%3A%2F%2Fwww.nvidia.com%2Fen-us%2Fomniverse%2F)。
-2. 進入 **Exchange** 分頁，搜尋 **"Streaming Client"** 並安裝。
-
-### 2. 啟動伺服器串流
-
-回到 **伺服器 (SSH)** 的 Docker 視窗內，輸入：
-
-```python
-# 啟動原生串流服務
-./isaac-sim.headless.native.sh
+```bash
+mkdir -p ~/isaac-sim/cache/kit \
+~/isaac-sim/cache/ov \
+~/isaac-sim/cache/pip \
+~/isaac-sim/cache/glcache \
+~/isaac-sim/cache/computecache \
+~/isaac-sim/logs \
+~/isaac-sim/data
 ```
 
-當你看到視窗輸出 [Isaac Sim] App is ready to receive connections 時，代表成功了。
-
-### 3. 本地端連線
-
-1. 打開你電腦上的 **Omniverse Streaming Client**。
-2. 在 **Server Address** 輸入學校伺服器的 IP 地址。
-3. 點擊 **Connect**。
-4. **大功告成！** 你現在應該能看到 Isaac Sim 的視窗在你的本地端跳出來。
-
----
-
-### 第三階段：針對「機器狗訓練」的額外配置 (Isaac Lab)
-
-訓練機器狗通常需要 **Isaac Lab** (前身是 Orbit)，它建立在 Isaac Sim 之上。
-
-### 1. 在容器內安裝 Isaac Lab
-
-在 Docker 容器內，執行以下步驟：
-
-```python
-# 下載 Isaac Lab
-git clone https://github.com/isaac-sim/IsaacLab.git /workspace/IsaacLab
-
-# 進入目錄並安裝
-cd /workspace/IsaacLab
-./isaaclab.sh --install
+```bash
+docker run --name isaac-sim --entrypoint bash -it --gpus all --dns 8.8.8.8 \
+-e "ACCEPT_EULA=Y" -e "PRIVACY_CONSENT=Y" \
+-p 8211:8211 \
+-p 8899:8899 \
+-p 48010:48010 \
+-v ~/isaac-sim/cache/kit:/isaac-sim/kit/cache:rw \
+-v ~/isaac-sim/cache/ov:/root/.cache/ov:rw \
+-v ~/isaac-sim/cache/pip:/root/.cache/pip:rw \
+-v ~/isaac-sim/cache/glcache:/root/.cache/nvidia/GLCache:rw \
+-v ~/isaac-sim/cache/computecache:/root/.nv/ComputeCache:rw \
+-v ~/isaac-sim/logs:/root/.nvidia-omniverse/logs:rw \
+-v ~/isaac-sim/data:/root/isaac-sim/data:rw \
+nvcr.io/nvidia/isaac-sim:4.5.0-ros2-humble-1.0
 ```
 
-### 2. 測試機器狗 Demo
+### 5. 畫面傳輸與檢視
 
-安裝完成後，試跑一下機器狗的基礎範例（例如 Unitree Go1 或 A1）：
+接著大致後端流程就完成了！要來做畫面傳輸的工作，讓前端Windows可以看到畫面，其實也可以採無頭模式開發(沒有畫面)，但因為當初我們認為有畫面比較可以實際也比較不抽象。有兩種畫面呈現方式：
 
-```python
-# 使用 python 啟動範例
-./isaaclab.sh -p source/standalone/tutorials/00_sim/create_scene.py
+1. 直接用瀏覽器開（新版支援）：`http://GPU的IP:8211/streaming/client/`
+2. 下載 **NVIDIA Omniverse Streaming Client** 桌面程式連線 → 我們選用這種
+(Omniverse Streaming Client 目前已停止更新，若無法下載建議改用瀏覽器方式連線。)
+
+下載完應用程式後，先回到終端機docker畫面(提示符為 `root@...`)，執行：
+
+```bash
+# 1. 載入 ROS 2 環境 (因為是存檔版，所以檔案一定在)
+source /opt/ros/humble/setup.bash
+
+# 2. 設定通訊協定 (這行一定要打，環境變數重開會重置)
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# 3. 啟動直播
+./runheadless.webrtc.sh
 ```
 
----
-
-### 關鍵：解決「學校網路防火牆」問題
-
-如果連不上，這通常是學校防火牆擋住了串流埠位。你有兩個解決方案：
-
-1. **方案 A (最簡單)**：請管理員幫你開 Port。Isaac Sim 串流主要使用 **30000 - 30009** (UDP/TCP)。
-2. **方案 B (SSH 隧道)**：如果你沒權限改防火牆，在你的本地電腦開啟 CMD，輸入：
-    
-    ```python
-    # 建立隧道將遠端的 3000 埠對應到本地
-    ssh -L 3000:localhost:3000 你的帳號@學校伺服器IP
-    ```
+再打開應用程式，輸入Ubuntu帳號的IP位址，即可看到畫面
